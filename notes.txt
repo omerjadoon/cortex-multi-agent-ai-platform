@@ -1,0 +1,8 @@
+
+Admin
+admin@cortex.ai 
+admin123
+
+Developer
+omer@cortex.ai 
+omer$1234
