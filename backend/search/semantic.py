@@ -2,7 +2,6 @@ import asyncio
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchAny, MatchValue
 from sentence_transformers import SentenceTransformer
-import uuid
 from backend.config import settings
 
 VECTOR_SIZE = 384  # all-MiniLM-L6-v2 output size
@@ -11,7 +10,16 @@ VECTOR_SIZE = 384  # all-MiniLM-L6-v2 output size
 class SemanticSearch:
     def __init__(self):
         self.client = AsyncQdrantClient(url=settings.QDRANT_URL)
-        self.encoder = SentenceTransformer(settings.EMBEDDING_MODEL)
+        self._encoder = None
+
+    @property
+    def encoder(self) -> SentenceTransformer:
+        if self._encoder is None:
+            try:
+                self._encoder = SentenceTransformer(settings.EMBEDDING_MODEL, local_files_only=True)
+            except Exception:
+                self._encoder = SentenceTransformer(settings.EMBEDDING_MODEL)
+        return self._encoder
 
     def _encode(self, text: str) -> list[float]:
         return self.encoder.encode(text).tolist()
@@ -33,12 +41,16 @@ class SemanticSearch:
         await self.ensure_collection(collection)
         points = []
         for chunk in chunks:
+            chunk_id = chunk.get("id")
+            if not chunk_id:
+                raise ValueError("Each indexed chunk must include a stable ID")
             vector = await self._encode_async(chunk["content"])
             points.append(
                 PointStruct(
-                    id=str(uuid.uuid4()),
+                    id=str(chunk_id),
                     vector=vector,
                     payload={
+                        "chunk_id": str(chunk_id),
                         "content": chunk["content"],
                         "filename": chunk.get("filename", ""),
                         "collection": collection,
@@ -58,7 +70,7 @@ class SemanticSearch:
             )
             return [
                 {
-                    "id": str(hit.id),
+                    "id": str(hit.payload.get("chunk_id", hit.id)),
                     "content": hit.payload.get("content", ""),
                     "filename": hit.payload.get("filename", ""),
                     "collection": collection,

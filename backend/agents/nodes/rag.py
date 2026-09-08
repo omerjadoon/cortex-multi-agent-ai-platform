@@ -1,5 +1,6 @@
 """RAG node: hybrid search + LLM answer generation with scope enforcement."""
 
+import asyncio
 import os
 import logging
 from langchain_groq import ChatGroq
@@ -8,7 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from backend.agents.state import AgentState, get_last_user_message
 from backend.search.semantic import semantic_search
 from backend.search.bm25 import bm25_index
-from backend.search.hybrid import hybrid_search
+from backend.search.hybrid import fuse_results
 
 logger = logging.getLogger(__name__)
 
@@ -33,14 +34,26 @@ async def run_rag(state: AgentState) -> dict:
     """Run hybrid search asynchronously and generate an answer from retrieved chunks."""
     query = get_last_user_message(state)
     allowed_collections = state.get("allowed_collections", [])
-    progress_events = list(state.get("progress_events", []))
+    progress_events = list(state.get("progress_events") or [])
 
-    # 1. BM25 Keyword Search
-    try:
-        bm25_chunks = await bm25_index.search(query, allowed_collections, top_k=10)
-    except Exception as exc:
-        logger.error("bm25_index search failed: %s", exc)
+    # Retrieve both sources once, in parallel. The resulting lists are also used
+    # for RRF below, rather than re-querying through ``hybrid_search``.
+    bm25_result, semantic_result = await asyncio.gather(
+        bm25_index.search(query, allowed_collections, top_k=10),
+        semantic_search.search(query, allowed_collections, top_k=10),
+        return_exceptions=True,
+    )
+    if isinstance(bm25_result, Exception):
+        logger.error("bm25_index search failed: %s", bm25_result)
         bm25_chunks = []
+    else:
+        bm25_chunks = bm25_result
+
+    if isinstance(semantic_result, Exception):
+        logger.error("semantic_search failed: %s", semantic_result)
+        semantic_chunks = []
+    else:
+        semantic_chunks = semantic_result
 
     if bm25_chunks:
         bm25_detail = f"Retrieved {len(bm25_chunks)} BM25 keyword matches:\n\n" + "\n\n".join([
@@ -52,13 +65,6 @@ async def run_rag(state: AgentState) -> dict:
 
     progress_events.append({"step": "bm25", "status": "done", "detail": bm25_detail})
 
-    # 2. Semantic Vector Search
-    try:
-        semantic_chunks = await semantic_search.search(query, allowed_collections, top_k=10)
-    except Exception as exc:
-        logger.error("semantic_search failed: %s", exc)
-        semantic_chunks = []
-
     if semantic_chunks:
         semantic_detail = f"Retrieved {len(semantic_chunks)} Semantic vector matches:\n\n" + "\n\n".join([
             f"[{idx+1}] {c.get('filename', 'doc')} (Similarity Score: {c.get('semantic_score', 0):.4f})\n{c.get('content', '')}"
@@ -69,12 +75,8 @@ async def run_rag(state: AgentState) -> dict:
 
     progress_events.append({"step": "semantic", "status": "done", "detail": semantic_detail})
 
-    # 3. Hybrid Reranking (RRF)
-    try:
-        chunks = await hybrid_search(query, allowed_collections)
-    except Exception as exc:
-        logger.error("hybrid_search failed: %s", exc)
-        chunks = []
+    # 3. Hybrid reranking (RRF) over the exact results already retrieved above.
+    chunks = fuse_results(bm25_chunks, semantic_chunks, top_k=8)
 
     if chunks:
         merging_detail = f"Reciprocal Rank Fusion (RRF, k=60) merged top {len(chunks)} context chunks:\n\n" + "\n\n".join([

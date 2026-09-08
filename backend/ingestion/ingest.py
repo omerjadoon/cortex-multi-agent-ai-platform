@@ -1,3 +1,5 @@
+import uuid
+
 from backend.auth.models import Document
 from backend.search.bm25 import bm25_index
 from backend.search.semantic import semantic_search
@@ -102,16 +104,22 @@ async def ingest_document(collection: str, filename: str, content: str) -> int:
     chunks = _chunk_text(content, settings.chunk_size, settings.chunk_overlap)
 
     async with AsyncSessionLocal() as session:
+        chunk_dicts = []
         for chunk in chunks:
+            # One ID is assigned at ingestion and persisted in both stores. This
+            # makes RRF identity-based, not dependent on a collision-prone text
+            # prefix, and permits Qdrant upserts to address the exact chunk.
+            chunk_id = uuid.uuid4()
             doc = Document(
+                id=chunk_id,
                 collection_name=collection,
                 filename=filename,
                 content=chunk,
             )
             session.add(doc)
+            chunk_dicts.append({"id": str(chunk_id), "content": chunk, "filename": filename})
         await session.commit()
 
-    chunk_dicts = [{"content": c, "filename": filename} for c in chunks]
     await semantic_search.upsert(collection, chunk_dicts)
     await bm25_index.rebuild_collection(collection)
 

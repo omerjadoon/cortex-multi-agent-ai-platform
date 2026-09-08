@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, distinct, func, delete as sql_delete
@@ -8,7 +9,7 @@ from backend.auth.models import Document, RoleCollection
 from backend.db.session import get_db
 from backend.search.semantic import semantic_search
 from backend.search.bm25 import bm25_index
-from backend.search.hybrid import hybrid_search
+from backend.search.hybrid import hybrid_search, fuse_results
 from backend.ingestion.ingest import ingest_document
 
 router = APIRouter(tags=["collections"])
@@ -162,9 +163,11 @@ async def inspect_search(body: SearchInspectRequest):
     top_k = max(1, min(body.top_k, 20))
     collections = body.collections
 
-    semantic_chunks = await semantic_search.search(query, collections, top_k=top_k)
-    bm25_chunks = await bm25_index.search(query, collections, top_k=top_k)
-    reranked_chunks = await hybrid_search(query, collections, top_k=top_k)
+    bm25_chunks, semantic_chunks = await asyncio.gather(
+        bm25_index.search(query, collections, top_k=top_k),
+        semantic_search.search(query, collections, top_k=top_k),
+    )
+    reranked_chunks = fuse_results(bm25_chunks, semantic_chunks, top_k=top_k)
 
     return {
         "query": query,

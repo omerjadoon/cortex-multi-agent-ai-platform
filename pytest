@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+if [ -x "$SCRIPT_DIR/.venv/bin/pytest" ]; then
+    exec "$SCRIPT_DIR/.venv/bin/pytest" "$@"
+elif command -v pytest >/dev/null 2>&1; then
+    exec pytest "$@"
+elif python3 -m pytest --version >/dev/null 2>&1; then
+    exec python3 -m pytest "$@"
+else
+    echo "Error: pytest is not installed. Please activate the virtual environment: 'source .venv/bin/activate' or run '.venv/bin/pytest'." >&2
+    exit 1
+fi
