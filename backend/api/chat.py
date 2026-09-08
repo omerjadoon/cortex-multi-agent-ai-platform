@@ -312,6 +312,7 @@ async def chat_stream(
             initial_state = {
                 "messages": langchain_msgs,
                 "user_id": user.user_id,
+                "user_email": user.email,
                 "thread_id": str(thread.id),
                 "role": user.role,
                 "allowed_collections": user.allowed_collections,

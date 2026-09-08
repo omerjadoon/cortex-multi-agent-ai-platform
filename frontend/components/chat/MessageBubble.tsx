@@ -12,6 +12,24 @@ interface Props {
   question?: string
 }
 
+/** Detect if a message was blocked by guardrails based on content prefix or blocked flag */
+function isBlockedMessage(message: Message): boolean {
+  return (
+    message.blocked === true ||
+    message.content.startsWith('[Security Alert]') ||
+    message.content.startsWith('I cannot fulfill this request because it contains instructions that attempt to bypass')
+  )
+}
+
+/** Extract human-readable reason from a blocked message */
+function extractBlockReason(content: string): string {
+  const stripped = content
+    .replace(/^\[Security Alert\]\s*/i, '')
+    .replace(/^I cannot fulfill this request because it contains instructions that attempt to bypass safety guidelines, override system prompts, or generate inappropriate content\.?/i, '')
+    .trim()
+  return stripped || 'This request was blocked by the security guardrail.'
+}
+
 export function MessageBubble({ message, question }: Props) {
   const isUser = message.role === 'user'
   const setMessageFeedback = useChatStore((s) => s.setMessageFeedback)
@@ -38,6 +56,57 @@ export function MessageBubble({ message, question }: Props) {
     }
   }
 
+  // ── Security guardrail block card ──────────────────────────────────────────
+  if (!isUser && isBlockedMessage(message)) {
+    const reason = extractBlockReason(message.content)
+    return (
+      <div className="flex justify-start mb-3">
+        <div className="max-w-[80%]">
+          <div className="flex items-start gap-2">
+            {/* Shield icon avatar */}
+            <div className="w-6 h-6 flex items-center justify-center flex-shrink-0 bg-red-900/40 border border-red-500/50 text-red-400">
+              <ShieldIcon />
+            </div>
+
+            {/* Warning card */}
+            <div className="border border-red-500/40 bg-red-950/30 px-4 py-3 border-l-2 border-l-red-500">
+              {/* Header row */}
+              <div className="flex items-center gap-2 mb-2">
+                <WarningIcon />
+                <span className="text-xs font-mono font-bold text-red-400 uppercase tracking-widest">
+                  Security Guardrail Triggered
+                </span>
+              </div>
+
+              {/* Reason */}
+              {reason && (
+                <p className="text-xs font-mono text-red-300/80 leading-relaxed">
+                  {reason}
+                </p>
+              )}
+
+              {/* Footer badge */}
+              <div className="mt-3 flex items-center gap-1.5">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-900/40 border border-red-700/50 text-[10px] font-mono text-red-400 uppercase tracking-wider">
+                  <BlockIcon />
+                  Request Denied
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Timestamp */}
+          <div className="flex items-center gap-2 mt-1 pl-8">
+            <p className="text-xs font-mono text-slate-700" suppressHydrationWarning>
+              {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Normal message bubble ──────────────────────────────────────────────────
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
       <div className={`max-w-[80%] ${isUser ? 'order-2' : 'order-1'}`}>
@@ -128,6 +197,35 @@ export function MessageBubble({ message, question }: Props) {
         )}
       </div>
     </div>
+  )
+}
+
+// ── Icons ──────────────────────────────────────────────────────────────────
+
+function ShieldIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+    </svg>
+  )
+}
+
+function WarningIcon() {
+  return (
+    <svg className="w-4 h-4 text-red-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+    </svg>
+  )
+}
+
+function BlockIcon() {
+  return (
+    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+    </svg>
   )
 }
 

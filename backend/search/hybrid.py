@@ -1,3 +1,4 @@
+import asyncio
 from backend.search.bm25 import bm25_index
 from backend.search.semantic import semantic_search
 
@@ -7,8 +8,10 @@ def _rrf_score(ranks: list[int], k: int = 60) -> float:
 
 
 async def hybrid_search(query: str, collections: list[str], top_k: int = 8) -> list[dict]:
-    bm25_results = await bm25_index.search(query, collections, top_k=20)
-    semantic_results = await semantic_search.search(query, collections, top_k=20)
+    bm25_results, semantic_results = await asyncio.gather(
+        bm25_index.search(query, collections, top_k=20),
+        semantic_search.search(query, collections, top_k=20),
+    )
 
     # Build rank maps keyed by (collection, content[:80]) to deduplicate
     def key(doc: dict) -> str:

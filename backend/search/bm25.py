@@ -1,3 +1,4 @@
+import asyncio
 import re
 from rank_bm25 import BM25Okapi
 from sqlalchemy import select
@@ -28,17 +29,24 @@ class BM25Index:
             {"id": str(d.id), "content": d.content, "filename": d.filename, "collection": collection}
             for d in docs
         ]
-        corpus = [_tokenize(d.content) for d in docs]
-        self._indices[collection] = BM25Okapi(corpus)
+        corpus = await asyncio.to_thread(lambda: [_tokenize(d.content) for d in docs])
+        self._indices[collection] = await asyncio.to_thread(lambda: BM25Okapi(corpus))
 
     async def rebuild_collection(self, collection: str) -> None:
         await self.build(collection)
 
     async def search(self, query: str, collections: list[str], top_k: int = 10) -> list[dict]:
-        tokens = _tokenize(query)
+        tokens = await asyncio.to_thread(_tokenize, query)
         results: list[dict] = []
 
-        target = list(self._docs.keys()) if "*" in collections else collections
+        if not collections or "*" in collections or "all" in collections:
+            async with AsyncSessionLocal() as session:
+                res = await session.execute(select(Document.collection_name).distinct())
+                target = [r[0] for r in res.all() if r[0]]
+            if not target:
+                target = list(self._docs.keys())
+        else:
+            target = collections
 
         for col in target:
             if col not in self._indices:
@@ -46,7 +54,7 @@ class BM25Index:
             if col not in self._indices:
                 continue
 
-            scores = self._indices[col].get_scores(tokens)
+            scores = await asyncio.to_thread(self._indices[col].get_scores, tokens)
             docs = self._docs[col]
             ranked = sorted(
                 zip(scores, docs), key=lambda x: x[0], reverse=True

@@ -1,4 +1,4 @@
-import type { Role, User, FeedbackItem } from '@/types'
+import type { Role, User, FeedbackItem, SecurityIncident } from '@/types'
 import { auth } from '@/lib/auth'
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -20,6 +20,35 @@ function authHeaders(extra: HeadersInit = {}): HeadersInit {
 export interface DocEntry {
   filename: string
   chunks: number
+}
+
+export interface ChunkEntry {
+  id: string
+  filename: string
+  content: string
+  length: number
+}
+
+export interface ChunkingStrategy {
+  name: string
+  chunk_size?: number
+  target_chunk_size?: number
+  chunk_overlap: number
+  description: string
+  embedding_model?: string
+  vector_store?: string
+  lexical_store?: string
+  reranker?: string
+}
+
+export interface SearchInspectResponse {
+  query: string
+  collections: string[]
+  top_k: number
+  chunking_strategy: ChunkingStrategy
+  semantic_chunks: Array<{ content: string; filename?: string; score?: number; collection?: string; [key: string]: any }>
+  bm25_chunks: Array<{ content: string; filename?: string; score?: number; collection?: string; [key: string]: any }>
+  reranked_chunks: Array<{ content: string; filename?: string; score?: number; collection?: string; [key: string]: any }>
 }
 
 export const api = {
@@ -88,12 +117,18 @@ export const api = {
       headers: authHeaders(),
     }),
 
-  // ── Documents (knowledge base) ────────────────────────────────────────────
+  // ── Documents & Chunks (knowledge base) ──────────────────────────────────
   getDocuments: (collection: string) =>
     request<{ collection: string; documents: DocEntry[] }>(
       `/collections/${encodeURIComponent(collection)}/documents`,
       { headers: authHeaders() }
     ).then(r => r.documents),
+
+  getChunks: (collection: string, filename?: string) =>
+    request<{ collection: string; filename?: string; total_chunks: number; chunking_strategy: any; chunks: ChunkEntry[] }>(
+      `/collections/${encodeURIComponent(collection)}/chunks${filename ? `?filename=${encodeURIComponent(filename)}` : ''}`,
+      { headers: authHeaders() }
+    ),
 
   deleteDocument: (collection: string, filename: string) =>
     request<{ status: string }>(
@@ -106,6 +141,14 @@ export const api = {
       `/collections/${encodeURIComponent(collection)}/documents?filename=${encodeURIComponent(filename)}`,
       { method: 'PUT', headers: authHeaders(), body: JSON.stringify({ content }) }
     ),
+
+  // ── RAG Search Inspector ──────────────────────────────────────────────────
+  inspectSearch: (query: string, collections: string[] = [], topK: number = 5) =>
+    request<SearchInspectResponse>('/collections/inspect-search', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ query, collections, top_k: topK }),
+    }),
 
   // ── Feedback ──────────────────────────────────────────────────────────────
   submitFeedback: (rating: 1 | -1, question: string, answer: string) =>
@@ -150,4 +193,16 @@ export const api = {
     }
     return res.json() as Promise<{ collection: string; filename: string; chunks: number }>
   },
+
+  // ── Security Incidents ──────────────────────────────────────────────────
+  getSecurityIncidents: (reviewed?: boolean) =>
+    request<SecurityIncident[]>(`/security/incidents${reviewed !== undefined ? `?reviewed=${reviewed}` : ''}`, {
+      headers: authHeaders(),
+    }),
+
+  markIncidentReviewed: (id: string) =>
+    request<{ status: string; id: string }>(`/security/incidents/${id}/review`, {
+      method: 'PATCH',
+      headers: authHeaders(),
+    }),
 }

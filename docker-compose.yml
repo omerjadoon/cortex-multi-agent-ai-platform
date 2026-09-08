@@ -6,14 +6,15 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: cortex
     ports:
-      - "5433:5432"
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 10s
 
   qdrant:
     image: qdrant/qdrant:v1.9.2
@@ -21,11 +22,48 @@ services:
       - "6333:6333"
     volumes:
       - qdrantdata:/qdrant/storage
-    healthcheck:
-      test: [ "CMD-SHELL", "wget -qO- http://localhost:6333/health || exit 1" ]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/cortex
+      QDRANT_URL: http://qdrant:6333
+      JWT_SECRET: ${JWT_SECRET:-cortex_super_secret_jwt_key_2026}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse:3000}
+      CORS_ORIGINS: '["http://localhost:3000"]'
+    volumes:
+      # Live codebase mounting for instant hot-reloading
+      - ./backend:/app/backend
+      - ./tests:/app/tests
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      WATCHPACK_POLLING: "true" # Ensures hot reloading on Mac/Linux file mounts
+    volumes:
+      # Live codebase mounting for instant UI hot-reloading
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
 
   langfuse:
     image: langfuse/langfuse:2

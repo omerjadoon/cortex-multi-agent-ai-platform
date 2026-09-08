@@ -11,7 +11,7 @@ class AgentState(MessagesState):
     allowed_collections: list[str] = field(default_factory=list)
 
     # routing
-    intent: str = ""  # "rag" or "codegen"
+    intent: str = ""  # "rag", "codegen", or "out_of_scope"
 
     # RAG
     retrieved_chunks: list[dict] = field(default_factory=list)
@@ -36,3 +36,26 @@ class AgentState(MessagesState):
     final_answer: str = ""
     final_code: str = ""
     error: str = ""
+
+
+def get_last_user_message(state: AgentState | dict) -> str:
+    """Extract the last human/user text message from state (handles both dict and BaseMessage objects)."""
+    messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
+    for msg in reversed(messages):
+        if isinstance(msg, dict):
+            role = str(msg.get("type") or msg.get("role") or "").lower()
+            content = msg.get("content") or ""
+            if role in ("human", "user") and content:
+                return str(content)
+        elif hasattr(msg, "content"):
+            role = str(getattr(msg, "type", getattr(msg, "role", ""))).lower()
+            content = getattr(msg, "content", "")
+            if role in ("human", "user") and content:
+                return str(content)
+
+    if messages:
+        last = messages[-1]
+        if isinstance(last, dict):
+            return str(last.get("content", ""))
+        return str(getattr(last, "content", ""))
+    return ""

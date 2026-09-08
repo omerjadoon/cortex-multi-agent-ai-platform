@@ -1,6 +1,8 @@
 import os
+import io
 import logging
 import inspect
+import contextlib
 from functools import wraps
 
 logger = logging.getLogger(__name__)
@@ -12,22 +14,35 @@ try:
     from langfuse import Langfuse
     from langfuse.callback import CallbackHandler
 
-    secret_key = os.getenv("LANGFUSE_SECRET_KEY", "")
-    public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "")
-    host = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "https://cloud.langfuse.com"
+    secret_key = os.getenv("LANGFUSE_SECRET_KEY", "").strip()
+    public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "").strip()
+    host = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "http://langfuse:3000"
 
-    if secret_key and public_key:
-        langfuse = Langfuse(
-            secret_key=secret_key,
-            public_key=public_key,
-            host=host,
-        )
-        LANGFUSE_ENABLED = True
-        logger.info("Langfuse monitoring active (host: %s)", host)
-except Exception as exc:
-    logger.warning("Langfuse initialization failed: %s", exc)
-    langfuse = None
-    LANGFUSE_ENABLED = False
+    # Only attempt initialization if keys are provided and not dummy placeholders
+    if secret_key and public_key and not secret_key.startswith("your_") and secret_key != "sk-lf-dummy":
+        try:
+            client = Langfuse(
+                secret_key=secret_key,
+                public_key=public_key,
+                host=host,
+            )
+            # Suppress internal library stderr printing during auth check
+            f = io.StringIO()
+            with contextlib.redirect_stderr(f), contextlib.redirect_stdout(f):
+                is_authed = client.auth_check()
+
+            if is_authed:
+                langfuse = client
+                LANGFUSE_ENABLED = True
+                logger.info("Langfuse monitoring active (host: %s)", host)
+            else:
+                logger.info("Langfuse credentials invalid; telemetry disabled.")
+        except Exception:
+            logger.info("Langfuse credentials unauthenticated; telemetry disabled.")
+    else:
+        logger.info("Langfuse credentials not provided; telemetry disabled.")
+except Exception:
+        logger.info("Langfuse package not available or not configured; telemetry disabled.")
 
 
 def get_langfuse_callback(
@@ -36,12 +51,12 @@ def get_langfuse_callback(
     trace_name: str | None = None,
 ):
     """Return a LangChain CallbackHandler configured with session_id for Langfuse."""
-    if not LANGFUSE_ENABLED:
+    if not LANGFUSE_ENABLED or not langfuse:
         return None
     try:
-        secret_key = os.getenv("LANGFUSE_SECRET_KEY", "")
-        public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "")
-        host = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "https://cloud.langfuse.com"
+        secret_key = os.getenv("LANGFUSE_SECRET_KEY", "").strip()
+        public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "").strip()
+        host = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "http://langfuse:3000"
         
         kwargs = {
             "secret_key": secret_key,
@@ -56,8 +71,7 @@ def get_langfuse_callback(
             kwargs["trace_name"] = str(trace_name)
 
         return CallbackHandler(**kwargs)
-    except Exception as exc:
-        logger.warning("Failed to create Langfuse CallbackHandler: %s", exc)
+    except Exception:
         return None
 
 
@@ -83,16 +97,15 @@ def trace_node(name: str):
                 if session_id:
                     trace_kwargs["session_id"] = str(session_id)
 
-                trace = langfuse.trace(**trace_kwargs)
-                span = trace.span(name=name)
                 try:
+                    trace = langfuse.trace(**trace_kwargs)
+                    span = trace.span(name=name)
                     result = await fn(state, *args, **kwargs)
                     events = result.get("progress_events", [])
                     span.end(output={"last_event": events[-1] if events else {}})
                     return result
-                except Exception as exc:
-                    span.end(level="ERROR", status_message=str(exc))
-                    raise
+                except Exception:
+                    return await fn(state, *args, **kwargs)
             return async_wrapper
         else:
             @wraps(fn)
@@ -113,15 +126,14 @@ def trace_node(name: str):
                 if session_id:
                     trace_kwargs["session_id"] = str(session_id)
 
-                trace = langfuse.trace(**trace_kwargs)
-                span = trace.span(name=name)
                 try:
+                    trace = langfuse.trace(**trace_kwargs)
+                    span = trace.span(name=name)
                     result = fn(state, *args, **kwargs)
                     events = result.get("progress_events", [])
                     span.end(output={"last_event": events[-1] if events else {}})
                     return result
-                except Exception as exc:
-                    span.end(level="ERROR", status_message=str(exc))
-                    raise
+                except Exception:
+                    return fn(state, *args, **kwargs)
             return sync_wrapper
     return decorator

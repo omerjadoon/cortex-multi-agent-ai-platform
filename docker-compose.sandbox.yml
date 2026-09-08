@@ -1,0 +1,9 @@
+# Opt-in development override for Docker-backed generated-code execution.
+# Do not use a host Docker socket in a multi-tenant production deployment; point
+# DOCKER_HOST at a dedicated, access-controlled Docker daemon instead.
+services:
+  backend:
+    environment:
+      DOCKER_SANDBOX_IMAGE: openmind-sandbox:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

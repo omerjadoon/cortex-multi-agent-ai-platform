@@ -5,7 +5,7 @@ import logging
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from backend.agents.state import AgentState
+from backend.agents.state import AgentState, get_last_user_message
 
 logger = logging.getLogger(__name__)
 
@@ -16,27 +16,20 @@ _llm = ChatGroq(
 )
 
 _SYSTEM_PROMPT = """\
-You are an expert software architect & CNC engineer. Evaluate the user's coding/G-code request carefully.
+You are an expert software architect & Python engineer. Evaluate the user's coding request and create a step-by-step implementation plan.
 
 DECISION PROTOCOL:
-1. IF the request is extremely vague, incomplete, or missing critical required details (e.g. "write code for my file", "mill a pocket" without dimensions/depth, or unstated target APIs/formats), start your response EXACTLY with:
-   `CLARIFICATION_REQUIRED: <Specific polite question asking for the missing details>`
+- DEFAULT POLICY: Make sensible, best-practice assumptions and proceed immediately with a step-by-step implementation plan.
+- Human clarification is STRICTLY OPTIONAL and should be skipped for self-contained, standard, or simple requests (e.g. "generate a script that print hello world", "calculate fibonacci", "write a python function").
+- ONLY request clarification (`CLARIFICATION_REQUIRED: <question>`) if the request is completely blank, uninterpretable, or 100% impossible to proceed with writing code.
 
-2. OTHERWISE (if the request provides sufficient detail or is a clear self-contained prompt), produce a clear, numbered step-by-step implementation plan. Do NOT output code yet.
-
-Keep your output concise and direct.
+Keep your output concise and direct. Do NOT output Python code yet—only the numbered implementation steps.
 """
 
 
 def plan_code(state: AgentState) -> dict:
     """Generate a structured plan or request human clarification if details are missing."""
-    # Build conversation context from human messages
-    user_request = ""
-    for msg in reversed(state["messages"]):
-        if hasattr(msg, "content") and msg.type in ("human", "user"):
-            user_request = msg.content
-            break
-
+    user_request = get_last_user_message(state)
     progress_events = list(state.get("progress_events", []))
 
     try:
@@ -47,7 +40,14 @@ def plan_code(state: AgentState) -> dict:
         content = response.content.strip()
     except Exception as exc:
         logger.error("Planning failed: %s", exc)
-        content = "1. Implement requested logic\n2. Add error handling\n3. Provide unit test suite"
+        content = f"1. Parse requirements for: {user_request}\n2. Write Python script logic\n3. Validate execution and error handling"
+
+    # Override clarification requirement if request is self-contained or standard
+    if content.startswith("CLARIFICATION_REQUIRED:"):
+        lower_req = user_request.lower()
+        if len(user_request.strip()) > 3 and not any(w in lower_req for w in ["???", "unclear"]):
+            logger.info("Overriding clarification requirement to skip prompt interruption for: %s", user_request[:60])
+            content = f"1. Parse task requirement for: '{user_request}'\n2. Write executable Python script\n3. Add basic output validation"
 
     if content.startswith("CLARIFICATION_REQUIRED:"):
         question = content.replace("CLARIFICATION_REQUIRED:", "").strip()
@@ -66,7 +66,7 @@ def plan_code(state: AgentState) -> dict:
     progress_events.append({
         "step": "planning",
         "status": "done",
-        "detail": content[:150],
+        "detail": content,
     })
 
     return {

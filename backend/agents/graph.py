@@ -1,4 +1,4 @@
-"""LangGraph StateGraph wiring all agent nodes into a RAG + code-gen pipeline."""
+"""LangGraph StateGraph wiring all agent nodes into a RAG + code-gen + out_of_scope pipeline."""
 
 from langgraph.graph import StateGraph, END
 
@@ -6,6 +6,7 @@ from backend.agents.state import AgentState
 from backend.agents.nodes.guardrail import guardrail_check
 from backend.agents.nodes.router import route_intent
 from backend.agents.nodes.rag import run_rag
+from backend.agents.nodes.out_of_scope import handle_out_of_scope
 from backend.agents.nodes.planner import plan_code
 from backend.agents.nodes.codegen import generate_code
 from backend.agents.nodes.validator import validate_code
@@ -61,6 +62,7 @@ def build_graph() -> StateGraph:
     g.add_node("guardrail", guardrail_check)
     g.add_node("router", route_intent)
     g.add_node("rag", run_rag)
+    g.add_node("out_of_scope", handle_out_of_scope)
     g.add_node("planner", plan_code)
     g.add_node("codegen", generate_code)
     g.add_node("validator", validate_code)
@@ -81,18 +83,20 @@ def build_graph() -> StateGraph:
         },
     )
 
-    # Router -> RAG or Planner
+    # Router -> RAG, Planner, or out_of_scope
     g.add_conditional_edges(
         "router",
         lambda s: s.get("intent", "rag"),
         {
             "rag": "rag",
             "codegen": "planner",
+            "out_of_scope": "out_of_scope",
         },
     )
 
-    # RAG terminates
+    # RAG & Out of Scope terminate
     g.add_edge("rag", END)
+    g.add_edge("out_of_scope", END)
 
     # Code-gen pipeline: planner -> (clarification ? END : codegen)
     g.add_conditional_edges(

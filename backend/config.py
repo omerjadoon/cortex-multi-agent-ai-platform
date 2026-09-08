@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://localhost:6333"
     jwt_secret: str = "changeme"
     jwt_expire_minutes: int = 1440
+    cors_origins: list[str] = ["http://localhost:3000"]
     langfuse_secret_key: str = ""
     langfuse_public_key: str = ""
     langfuse_host: str = "http://localhost:3030"
@@ -14,6 +15,11 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     chunk_size: int = 512
     chunk_overlap: int = 64
+    sso_enabled: bool = False
+    oidc_issuer_url: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    default_tenant_id: str = "openmind_tech"
 
     class Config:
         env_file = ".env"

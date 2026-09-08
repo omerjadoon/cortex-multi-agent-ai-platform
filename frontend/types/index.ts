@@ -49,6 +49,17 @@ export interface Message {
   testCode?: string
   timestamp: Date
   feedback?: 1 | -1   // 1 = thumbs up, -1 = thumbs down
+  blocked?: boolean   // true if blocked by guardrails / security check
+}
+
+export interface SecurityIncident {
+  id: string
+  user_email: string | null
+  prompt: string
+  reason: string
+  severity: 'low' | 'medium' | 'high'
+  reviewed: boolean
+  created_at: string
 }
 
 export interface FeedbackItem {

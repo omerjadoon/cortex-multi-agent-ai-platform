@@ -2,7 +2,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
 
 from backend.db.session import get_db
@@ -50,16 +49,22 @@ class AdminCreateUserRequest(BaseModel):
     collections: list[str] = []
 
 
+from backend.security.audit import log_audit_event
+
+
 @router.post("/login")
 async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == body.email))
     user = result.scalar_one_or_none()
     if not user or not verify_password(body.password, user.password_hash):
+        log_audit_event("AUTHENTICATION", "LOGIN_FAILED", resource=body.email, status="DENIED")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if not user.is_active:
+        log_audit_event("AUTHENTICATION", "LOGIN_BLOCKED", user_id=str(user.id), tenant_id=user.tenant_id, status="DENIED", details={"reason": "inactive"})
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account inactive")
 
-    token = create_access_token({"sub": str(user.id), "role": user.role.value})
+    token = create_access_token({"sub": str(user.id), "role": user.role.value, "tenant_id": user.tenant_id})
+    log_audit_event("AUTHENTICATION", "LOGIN_SUCCESS", user_id=str(user.id), tenant_id=user.tenant_id, status="SUCCESS")
     return {"access_token": token, "token_type": "bearer", "role": user.role.value}
 
 

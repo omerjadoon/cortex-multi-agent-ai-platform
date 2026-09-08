@@ -44,6 +44,12 @@ class User(Base):
         nullable=False,
         default=UserRole.viewer,
     )
+    tenant_id: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        default="default_tenant",
+        index=True,
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -98,6 +104,12 @@ class Document(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
+    tenant_id: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        default="default_tenant",
+        index=True,
+    )
     collection_name: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
@@ -126,6 +138,9 @@ class Feedback(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    tenant_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="default_tenant", index=True
+    )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -150,6 +165,9 @@ class ChatThread(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="default_tenant", index=True
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
@@ -193,3 +211,36 @@ class ChatMessage(Base):
 
     thread: Mapped["ChatThread"] = relationship("ChatThread", back_populates="messages")
 
+
+class SecurityIncidentSeverity(str, enum.Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+
+
+class SecurityIncident(Base):
+    """Records every guardrail-blocked or security-flagged prompt for admin review."""
+
+    __tablename__ = "security_incidents"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="default_tenant", index=True
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    user_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[SecurityIncidentSeverity] = mapped_column(
+        Enum(SecurityIncidentSeverity, name="securityincidentseverity"),
+        nullable=False,
+        default=SecurityIncidentSeverity.medium,
+    )
+    reviewed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )

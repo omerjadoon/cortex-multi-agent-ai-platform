@@ -3,10 +3,10 @@ import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { auth } from '@/lib/auth'
 import { api } from '@/lib/api'
-import type { User, FeedbackItem } from '@/types'
-import type { DocEntry } from '@/lib/api'
+import type { User, FeedbackItem, SecurityIncident } from '@/types'
+import type { DocEntry, ChunkEntry, SearchInspectResponse } from '@/lib/api'
 
-type Tab = 'users' | 'kb' | 'ingest' | 'feedback'
+type Tab = 'users' | 'kb' | 'inspector' | 'ingest' | 'feedback' | 'security'
 
 function StatusBanner({ msg, onClear }: { msg: string; onClear: () => void }) {
   if (!msg) return null
@@ -229,15 +229,19 @@ function UsersTab({ onStatus }: { onStatus: (m: string) => void }) {
   )
 }
 
-function DocumentRow({ doc, onDelete, onUpdate }: { doc: DocEntry; onDelete: () => void; onUpdate: (content: string) => void }) {
+function DocumentRow({ doc, collection, onDelete, onUpdate }: { doc: DocEntry; collection: string; onDelete: () => void; onUpdate: (content: string) => void }) {
   const [expanded, setExpanded] = useState(false)
   const [editMode, setEditMode] = useState(false)
+  const [viewChunks, setViewChunks] = useState(false)
+  const [chunks, setChunks] = useState<ChunkEntry[]>([])
+  const [loadingChunks, setLoadingChunks] = useState(false)
   const [content, setContent] = useState('')
 
   const openEdit = () => {
     setContent('')
     setEditMode(true)
     setExpanded(true)
+    setViewChunks(false)
   }
 
   const handleSave = () => {
@@ -247,23 +251,71 @@ function DocumentRow({ doc, onDelete, onUpdate }: { doc: DocEntry; onDelete: () 
     setExpanded(false)
   }
 
+  const toggleChunks = async () => {
+    if (!viewChunks) {
+      setLoadingChunks(true)
+      try {
+        const res = await api.getChunks(collection, doc.filename)
+        setChunks(res.chunks)
+      } catch (err: any) {
+        console.error(err)
+      } finally {
+        setLoadingChunks(false)
+      }
+    }
+    setViewChunks(!viewChunks)
+    setEditMode(false)
+    setExpanded(true)
+  }
+
   return (
     <div className="border border-slate-700 overflow-hidden">
       <div className="flex items-center justify-between px-3 py-2.5 bg-slate-900">
         <div className="flex items-center gap-2 min-w-0">
           <div className="w-1 h-4 bg-slate-600 flex-shrink-0" />
           <span className="text-xs font-mono text-slate-300 truncate">{doc.filename}</span>
-          <span className="text-xs font-mono text-slate-600 flex-shrink-0">[{doc.chunks}]</span>
+          <span className="text-xs font-mono text-amber-400/80 flex-shrink-0">[{doc.chunks} chunks]</span>
         </div>
         <div className="flex gap-1 flex-shrink-0">
+          <button onClick={toggleChunks} className="text-xs font-mono text-amber-400 hover:text-amber-300 px-2 py-1 border border-transparent hover:border-amber-700/40 transition-colors uppercase">
+            {viewChunks ? 'HIDE CHUNKS' : 'VIEW CHUNKS'}
+          </button>
           <button onClick={openEdit} className="text-xs font-mono text-cyan-500 hover:text-cyan-400 px-2 py-1 border border-transparent hover:border-cyan-700/40 transition-colors uppercase">UPDATE</button>
           <button onClick={onDelete} className="text-xs font-mono text-red-500 hover:text-red-400 px-2 py-1 border border-transparent hover:border-red-700/40 transition-colors uppercase">DELETE</button>
-          <button onClick={() => { setExpanded(v => !v); setEditMode(false) }} className="text-xs font-mono text-slate-600 hover:text-slate-300 px-2 py-1 transition-colors">{expanded ? '▲' : '▼'}</button>
+          <button onClick={() => { setExpanded(v => !v); setEditMode(false); setViewChunks(false) }} className="text-xs font-mono text-slate-600 hover:text-slate-300 px-2 py-1 transition-colors">{expanded ? '▲' : '▼'}</button>
         </div>
       </div>
+
       {expanded && (
-        <div className="border-t border-slate-700 px-3 py-3 bg-slate-900/50">
-          {editMode ? (
+        <div className="border-t border-slate-700 px-3 py-3 bg-slate-900/50 space-y-3">
+          {viewChunks && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-1">
+                <span className="text-[11px] font-mono text-amber-400 font-bold uppercase">
+                  RAW CHUNKS ({chunks.length}) — Recursive Semantic Splitter (512 Chars Target)
+                </span>
+              </div>
+              {loadingChunks ? (
+                <p className="text-xs font-mono text-slate-500 cnc-pulse">Loading chunks from database...</p>
+              ) : chunks.length === 0 ? (
+                <p className="text-xs font-mono text-slate-600">No chunks found.</p>
+              ) : (
+                <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                  {chunks.map((c, idx) => (
+                    <div key={c.id || idx} className="bg-slate-950 border border-slate-800 p-2.5 font-mono text-xs space-y-1">
+                      <div className="flex justify-between text-[10px] text-slate-500 border-b border-slate-800/60 pb-1">
+                        <span className="text-amber-500 font-bold">CHUNK #{idx + 1}</span>
+                        <span>{c.length} CHARACTERS</span>
+                      </div>
+                      <p className="text-slate-300 whitespace-pre-wrap text-[11px] leading-relaxed">{c.content}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {editMode && (
             <div className="space-y-2">
               <p className="text-xs font-mono text-slate-600">Paste new content — replaces all existing chunks.</p>
               <textarea
@@ -278,8 +330,10 @@ function DocumentRow({ doc, onDelete, onUpdate }: { doc: DocEntry; onDelete: () 
                 <button onClick={() => { setEditMode(false); setExpanded(false) }} className="px-4 py-1.5 border border-slate-600 hover:border-slate-500 text-slate-400 hover:text-slate-200 text-xs font-mono uppercase transition-colors">CANCEL</button>
               </div>
             </div>
-          ) : (
-            <p className="text-xs font-mono text-slate-600">Click UPDATE to replace content, DELETE to remove entirely.</p>
+          )}
+
+          {!viewChunks && !editMode && (
+            <p className="text-xs font-mono text-slate-600">Click VIEW CHUNKS to inspect stored chunks, UPDATE to replace content, DELETE to remove.</p>
           )}
         </div>
       )}
@@ -410,6 +464,7 @@ function KnowledgeBaseTab({ onStatus }: { onStatus: (m: string) => void }) {
                   <DocumentRow
                     key={doc.filename}
                     doc={doc}
+                    collection={selected}
                     onDelete={() => handleDeleteDoc(doc.filename)}
                     onUpdate={content => handleUpdateDoc(doc.filename, content)}
                   />
@@ -419,6 +474,197 @@ function KnowledgeBaseTab({ onStatus }: { onStatus: (m: string) => void }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function SearchInspectorTab({ onStatus }: { onStatus: (m: string) => void }) {
+  const [collections, setCollections] = useState<string[]>([])
+  const [query, setQuery] = useState('')
+  const [selectedCol, setSelectedCol] = useState<string>('')
+  const [topK, setTopK] = useState<number>(5)
+  const [inspectResult, setInspectResult] = useState<SearchInspectResponse | null>(null)
+  const [searching, setSearching] = useState(false)
+
+  useEffect(() => {
+    api.getCollections().then(setCollections).catch(() => {})
+  }, [])
+
+  const handleInspect = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault()
+    if (!query.trim()) return
+    setSearching(true)
+    try {
+      const colList = selectedCol ? [selectedCol] : []
+      const res = await api.inspectSearch(query.trim(), colList, topK)
+      setInspectResult(res)
+      onStatus(`Retrieved top ${topK} chunks for query across all 3 pipeline stages`)
+    } catch (err: any) {
+      onStatus(err.message)
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Strategy Banner */}
+      <div className="border border-slate-700 bg-slate-900/80 p-4 space-y-3">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 bg-amber-500 rounded-full" />
+            <h3 className="text-xs font-mono font-bold text-amber-400 uppercase tracking-wider">
+              Active Chunking Strategy & Retrieval Architecture
+            </h3>
+          </div>
+          <span className="text-[11px] font-mono text-emerald-400 font-semibold uppercase">Recursive Semantic Splitter</span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs font-mono">
+          <div className="bg-slate-950 p-2.5 border border-slate-800">
+            <span className="text-slate-500 block text-[10px] uppercase">Chunking Strategy</span>
+            <span className="text-slate-200 font-semibold">{inspectResult?.chunking_strategy?.name || 'Recursive Hierarchical Semantic Chunking'}</span>
+            <p className="text-[11px] text-slate-400 mt-1">Target: <strong className="text-amber-400">512 chars</strong> | Overlap: <strong className="text-amber-400">64 chars</strong></p>
+          </div>
+          <div className="bg-slate-950 p-2.5 border border-slate-800">
+            <span className="text-slate-500 block text-[10px] uppercase">Semantic Vector Search</span>
+            <span className="text-slate-200 font-semibold">{inspectResult?.chunking_strategy?.embedding_model || 'BAAI/bge-small-en-v1.5'}</span>
+            <p className="text-[11px] text-slate-400 mt-1">384 Dimensions | {inspectResult?.chunking_strategy?.vector_store || 'Qdrant Vector Engine'}</p>
+          </div>
+          <div className="bg-slate-950 p-2.5 border border-slate-800">
+            <span className="text-slate-500 block text-[10px] uppercase">Lexical Engine (BM25)</span>
+            <span className="text-slate-200 font-semibold">{inspectResult?.chunking_strategy?.lexical_store || 'BM25 In-Memory Index'}</span>
+            <p className="text-[11px] text-slate-400 mt-1">Exact keyword token frequency matching</p>
+          </div>
+          <div className="bg-slate-950 p-2.5 border border-slate-800">
+            <span className="text-slate-500 block text-[10px] uppercase">Hybrid Reranker</span>
+            <span className="text-slate-200 font-semibold">{inspectResult?.chunking_strategy?.reranker || 'Reciprocal Rank Fusion (RRF)'}</span>
+            <p className="text-[11px] text-slate-400 mt-1">RRF (k=60) multi-stage candidate merger</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Query Search Form */}
+      <form onSubmit={handleInspect} className="flex gap-2">
+        <input
+          type="text"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Enter search prompt (e.g. 'How does RBAC work in OpenMind?')"
+          className="flex-1 bg-slate-900 border border-slate-700 px-4 py-2.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-amber-500 placeholder-slate-600"
+        />
+        <select
+          value={selectedCol}
+          onChange={e => setSelectedCol(e.target.value)}
+          className="bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs text-slate-300 font-mono focus:outline-none focus:border-amber-500"
+        >
+          <option value="">All Collections</option>
+          {collections.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select
+          value={topK}
+          onChange={e => setTopK(Number(e.target.value))}
+          className="bg-slate-900 border border-slate-700 px-3 py-2.5 text-xs text-slate-300 font-mono focus:outline-none focus:border-amber-500"
+        >
+          <option value={3}>Top 3</option>
+          <option value={5}>Top 5</option>
+          <option value={10}>Top 10</option>
+        </select>
+        <button
+          type="submit"
+          disabled={searching || !query.trim()}
+          className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-slate-950 font-mono text-xs font-bold uppercase tracking-wider transition-colors"
+        >
+          {searching ? 'INSPECTING...' : 'INSPECT RETRIEVAL'}
+        </button>
+      </form>
+
+      {/* 3-Column Inspection Output */}
+      {inspectResult && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between text-xs font-mono text-slate-400 border-b border-slate-800 pb-2">
+            <span>QUERY: <strong className="text-amber-300 font-normal">"{inspectResult.query}"</strong></span>
+            <span>SHOWING: <strong className="text-slate-200">Top {inspectResult.top_k} Chunks Per Stage</strong></span>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Column 1: Semantic Vector Search */}
+            <div className="border border-cyan-800/40 bg-cyan-950/10 p-3 space-y-3">
+              <div className="flex items-center justify-between border-b border-cyan-800/30 pb-2">
+                <span className="text-xs font-mono font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <span>🔮</span> Stage 1: Semantic Vector Search
+                </span>
+                <span className="text-[10px] font-mono bg-cyan-900/40 text-cyan-300 px-2 py-0.5 border border-cyan-700/40">Qdrant</span>
+              </div>
+              <div className="space-y-2">
+                {inspectResult.semantic_chunks.length === 0 ? (
+                  <p className="text-xs font-mono text-slate-600">No semantic matches found.</p>
+                ) : (
+                  inspectResult.semantic_chunks.map((chunk, idx) => (
+                    <div key={idx} className="border border-slate-800 bg-slate-900 p-2.5 space-y-1 text-xs font-mono">
+                      <div className="flex items-center justify-between text-[11px] text-slate-400 border-b border-slate-800 pb-1">
+                        <span className="text-cyan-400 font-bold">#{idx + 1} {chunk.filename || chunk.source || 'chunk'}</span>
+                        {chunk.score && <span className="text-slate-500 text-[10px]">score: {Number(chunk.score).toFixed(3)}</span>}
+                      </div>
+                      <p className="text-slate-300 leading-relaxed text-[11px] whitespace-pre-wrap">{chunk.content || chunk.text}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Column 2: BM25 Lexical Keyword Search */}
+            <div className="border border-amber-800/40 bg-amber-950/10 p-3 space-y-3">
+              <div className="flex items-center justify-between border-b border-amber-800/30 pb-2">
+                <span className="text-xs font-mono font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <span>🔍</span> Stage 2: Lexical BM25 Search
+                </span>
+                <span className="text-[10px] font-mono bg-amber-900/40 text-amber-300 px-2 py-0.5 border border-amber-700/40">In-Memory</span>
+              </div>
+              <div className="space-y-2">
+                {inspectResult.bm25_chunks.length === 0 ? (
+                  <p className="text-xs font-mono text-slate-600">No BM25 matches found.</p>
+                ) : (
+                  inspectResult.bm25_chunks.map((chunk, idx) => (
+                    <div key={idx} className="border border-slate-800 bg-slate-900 p-2.5 space-y-1 text-xs font-mono">
+                      <div className="flex items-center justify-between text-[11px] text-slate-400 border-b border-slate-800 pb-1">
+                        <span className="text-amber-400 font-bold">#{idx + 1} {chunk.filename || chunk.source || 'chunk'}</span>
+                        {chunk.score && <span className="text-slate-500 text-[10px]">score: {Number(chunk.score).toFixed(3)}</span>}
+                      </div>
+                      <p className="text-slate-300 leading-relaxed text-[11px] whitespace-pre-wrap">{chunk.content || chunk.text}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Column 3: RRF Reranked Merged Output */}
+            <div className="border border-emerald-800/40 bg-emerald-950/10 p-3 space-y-3">
+              <div className="flex items-center justify-between border-b border-emerald-800/30 pb-2">
+                <span className="text-xs font-mono font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <span>⚡</span> Stage 3: RRF Reranked Merged
+                </span>
+                <span className="text-[10px] font-mono bg-emerald-900/40 text-emerald-300 px-2 py-0.5 border border-emerald-700/40">Final Prompt Context</span>
+              </div>
+              <div className="space-y-2">
+                {inspectResult.reranked_chunks.length === 0 ? (
+                  <p className="text-xs font-mono text-slate-600">No reranked chunks retrieved.</p>
+                ) : (
+                  inspectResult.reranked_chunks.map((chunk, idx) => (
+                    <div key={idx} className="border border-emerald-950 bg-slate-900 p-2.5 space-y-1 text-xs font-mono">
+                      <div className="flex items-center justify-between text-[11px] text-slate-400 border-b border-slate-800 pb-1">
+                        <span className="text-emerald-400 font-bold">#{idx + 1} {chunk.filename || chunk.source || 'chunk'}</span>
+                        <span className="text-emerald-400 text-[10px] font-bold">Passed to LLM</span>
+                      </div>
+                      <p className="text-slate-200 leading-relaxed text-[11px] whitespace-pre-wrap">{chunk.content || chunk.text}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -616,6 +862,103 @@ function FeedbackTab({ onStatus }: { onStatus: (m: string) => void }) {
   )
 }
 
+function SecurityTab({ onStatus }: { onStatus: (m: string) => void }) {
+  const [incidents, setIncidents] = useState<SecurityIncident[]>([])
+  const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState<'unreviewed' | 'all'>('unreviewed')
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await api.getSecurityIncidents(filter === 'unreviewed' ? false : undefined)
+      setIncidents(data)
+    } catch (e: any) {
+      onStatus(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [filter, onStatus])
+
+  useEffect(() => { load() }, [load])
+
+  const handleReview = async (id: string) => {
+    try {
+      await api.markIncidentReviewed(id)
+      onStatus('Incident marked as reviewed.')
+      load()
+    } catch (e: any) {
+      onStatus(e.message)
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="text-xs font-mono font-bold uppercase tracking-widest text-red-400">FLAGGED PROMPTS & SECURITY AUDIT</h2>
+          <p className="text-xs font-mono text-slate-500">Automated audit trail of prompt injection, system prompt extraction, and guardrail violations</p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setFilter('unreviewed')}
+            className={`px-3 py-1 text-xs font-mono border transition-colors ${
+              filter === 'unreviewed' ? 'border-red-500 bg-red-950/40 text-red-400 font-bold' : 'border-slate-700 text-slate-500 hover:text-slate-300'
+            }`}
+          >UNREVIEWED</button>
+          <button
+            onClick={() => setFilter('all')}
+            className={`px-3 py-1 text-xs font-mono border transition-colors ${
+              filter === 'all' ? 'border-amber-500 bg-amber-950/40 text-amber-400 font-bold' : 'border-slate-700 text-slate-500 hover:text-slate-300'
+            }`}
+          >ALL LOGS</button>
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="text-xs font-mono text-slate-600 cnc-pulse uppercase tracking-wider">Loading security logs...</p>
+      ) : incidents.length === 0 ? (
+        <p className="text-xs font-mono text-slate-700 uppercase">No security incidents recorded.</p>
+      ) : (
+        <div className="space-y-3">
+          {incidents.map((item) => (
+            <div key={item.id} className={`p-4 border font-mono text-xs ${item.reviewed ? 'border-slate-800 bg-slate-900/50 opacity-75' : 'border-red-900/60 bg-red-950/20'}`}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <span className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                    item.severity === 'high' ? 'bg-red-900/50 text-red-400 border border-red-700/50' :
+                    item.severity === 'medium' ? 'bg-amber-900/50 text-amber-400 border border-amber-700/50' :
+                    'bg-slate-800 text-slate-400 border border-slate-700'
+                  }`}>
+                    [{item.severity}]
+                  </span>
+                  <span className="text-slate-400">{item.user_email || 'Anonymous User'}</span>
+                  <span className="text-slate-600">•</span>
+                  <span className="text-slate-500">{new Date(item.created_at).toLocaleString()}</span>
+                </div>
+                {!item.reviewed && (
+                  <button
+                    onClick={() => handleReview(item.id)}
+                    className="px-2 py-1 text-[10px] bg-slate-800 hover:bg-slate-700 border border-slate-600 text-emerald-400 uppercase tracking-wider transition-colors"
+                  >
+                    MARK REVIEWED
+                  </button>
+                )}
+              </div>
+              <div className="mb-2 bg-slate-950 p-2 border border-slate-800">
+                <span className="text-slate-500 block text-[10px] uppercase tracking-widest mb-1">Flagged Prompt:</span>
+                <p className="text-slate-200 whitespace-pre-wrap">{item.prompt}</p>
+              </div>
+              <div className="text-red-300/90 text-[11px]">
+                <span className="text-red-500 font-bold">REASON:</span> {item.reason}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function AdminPage() {
   const router = useRouter()
   const [tab, setTab] = useState<Tab>('feedback')
@@ -628,7 +971,9 @@ export default function AdminPage() {
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'feedback', label: 'FEEDBACK' },
+    { id: 'security', label: 'SECURITY LOGS' },
     { id: 'kb', label: 'KNOWLEDGE BASE' },
+    { id: 'inspector', label: 'RAG SEARCH INSPECTOR' },
     { id: 'ingest', label: 'INGEST' },
     { id: 'users', label: 'USERS' },
   ]
@@ -661,7 +1006,9 @@ export default function AdminPage() {
           ))}
         </div>
         {tab === 'feedback' && <FeedbackTab onStatus={setStatus} />}
+        {tab === 'security' && <SecurityTab onStatus={setStatus} />}
         {tab === 'kb' && <KnowledgeBaseTab onStatus={setStatus} />}
+        {tab === 'inspector' && <SearchInspectorTab onStatus={setStatus} />}
         {tab === 'ingest' && <IngestTab onStatus={setStatus} />}
         {tab === 'users' && <UsersTab onStatus={setStatus} />}
       </div>

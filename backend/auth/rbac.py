@@ -17,6 +17,7 @@ class UserContext:
     email: str
     role: str
     allowed_collections: List[str]
+    tenant_id: str = "default_tenant"
 
 
 async def get_current_user(
@@ -47,6 +48,7 @@ async def get_current_user(
         email=user.email,
         role=user.role.value,
         allowed_collections=collections,
+        tenant_id=getattr(user, "tenant_id", "default_tenant") or "default_tenant",
     )
 
 
